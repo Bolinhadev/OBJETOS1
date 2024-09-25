@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Detecção Detalhada de Pessoas e Objetos</title>
+    <title>Detecção Leve de Faces e Pontos-Chave</title>
     <style>
         body, html {
             margin: 0;
@@ -18,18 +18,11 @@
         }
         #container {
             position: relative;
-            width: 100%;
-            height: 100%;
-            display: flex;
-            justify-content: center;
-            align-items: center;
         }
         video, canvas {
             position: absolute;
-            max-width: 100%;
-            max-height: 100%;
-            width: auto;
-            height: auto;
+            top: 0;
+            left: 0;
         }
         #loading {
             position: fixed;
@@ -46,17 +39,13 @@
 </head>
 <body>
     <div id="container">
-        <video id="video" autoplay muted></video>
-        <canvas id="canvas"></canvas>
+        <video id="video" width="640" height="480" autoplay muted></video>
+        <canvas id="canvas" width="640" height="480"></canvas>
     </div>
-    <div id="loading">Carregando modelos... <span id="progress">0%</span></div>
+    <div id="loading">Carregando modelo... <span id="progress">0%</span></div>
 
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/blazeface"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/handpose"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/body-pix"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/face-landmarks-detection"></script>
     <script>
         const video = document.getElementById('video');
         const canvas = document.getElementById('canvas');
@@ -64,7 +53,7 @@
         const loadingElement = document.getElementById('loading');
         const progressElement = document.getElementById('progress');
 
-        let cocoSsdModel, blazefaceModel, handposeModel, bodyPixModel, faceLandmarksModel;
+        let blazefaceModel;
         let isProcessing = false;
 
         async function setupCamera() {
@@ -73,98 +62,58 @@
             return new Promise(resolve => {
                 video.onloadedmetadata = () => {
                     video.play();
-                    canvas.width = video.videoWidth;
-                    canvas.height = video.videoHeight;
                     resolve();
                 };
             });
         }
 
-        async function loadModel(modelLoader, name) {
+        async function loadModel() {
             try {
-                const model = await modelLoader();
-                console.log(`${name} carregado.`);
-                return model;
+                blazefaceModel = await blazeface.load();
+                console.log('BlazeFace modelo carregado.');
+                progressElement.textContent = '100%';
+                loadingElement.style.display = 'none';
             } catch (error) {
-                console.error(`Erro ao carregar ${name}:`, error);
-                return null;
+                console.error('Erro ao carregar o modelo:', error);
             }
         }
 
-        async function loadModels() {
-            const totalModels = 5;
-            let loadedModels = 0;
-
-            const updateProgress = () => {
-                loadedModels++;
-                const progress = Math.round((loadedModels / totalModels) * 100);
-                progressElement.textContent = `${progress}%`;
-            };
-
-            [cocoSsdModel, blazefaceModel, handposeModel, bodyPixModel, faceLandmarksModel] = await Promise.all([
-                loadModel(() => cocoSsd.load(), 'COCO-SSD').then(model => { updateProgress(); return model; }),
-                loadModel(() => blazeface.load(), 'BlazeFace').then(model => { updateProgress(); return model; }),
-                loadModel(() => handpose.load(), 'HandPose').then(model => { updateProgress(); return model; }),
-                loadModel(() => bodyPix.load(), 'BodyPix').then(model => { updateProgress(); return model; }),
-                loadModel(() => faceLandmarksDetection.load(faceLandmarksDetection.SupportedPackages.mediapipeFacemesh), 'FaceLandmarks').then(model => { updateProgress(); return model; })
-            ]);
-
-            loadingElement.style.display = 'none';
-        }
-
-        async function detectObjects() {
-            if (isProcessing) return;
+        async function detectFaces() {
+            if (isProcessing || !blazefaceModel) return;
             isProcessing = true;
 
             try {
-                // COCO-SSD detection
-                if (cocoSsdModel) {
-                    const cocoDetections = await cocoSsdModel.detect(video);
-                    cocoDetections.forEach(detection => {
-                        if (detection.class === 'person') {
-                            drawBox(detection.bbox, 'red', `Pessoa (${Math.round(detection.score * 100)}%)`);
-                        } else {
-                            drawBox(detection.bbox, 'blue', `${detection.class} (${Math.round(detection.score * 100)}%)`);
-                        }
-                    });
-                }
+                const predictions = await blazefaceModel.estimateFaces(video, false);
+                
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-                // BlazeFace detection
-                if (blazefaceModel) {
-                    const blazefaceDetections = await blazefaceModel.estimateFaces(video, false);
-                    blazefaceDetections.forEach(face => {
-                        drawBox([face.topLeft[0], face.topLeft[1], face.bottomRight[0] - face.topLeft[0], face.bottomRight[1] - face.topLeft[1]], 'green', 'Rosto');
-                    });
-                }
-
-                // HandPose detection
-                if (handposeModel) {
-                    const hands = await handposeModel.estimateHands(video);
-                    hands.forEach(hand => {
-                        drawHand(hand.landmarks, 'yellow');
-                    });
-                }
-
-                // BodyPix segmentation
-                if (bodyPixModel) {
-                    const segmentation = await bodyPixModel.segmentPersonParts(video);
-                    const coloredPartImage = bodyPix.toColoredPartMask(segmentation);
-                    const opacity = 0.7;
-                    const flipHorizontal = false;
-                    const maskBlurAmount = 0;
-                    bodyPix.drawMask(
-                        canvas, video, coloredPartImage, opacity, maskBlurAmount,
-                        flipHorizontal
+                predictions.forEach(face => {
+                    // Desenhar caixa do rosto
+                    ctx.strokeStyle = 'green';
+                    ctx.lineWidth = 2;
+                    ctx.strokeRect(
+                        face.topLeft[0], face.topLeft[1],
+                        face.bottomRight[0] - face.topLeft[0],
+                        face.bottomRight[1] - face.topLeft[1]
                     );
-                }
 
-                // Face Landmarks detection
-                if (faceLandmarksModel) {
-                    const predictions = await faceLandmarksModel.estimateFaces({input: video});
-                    predictions.forEach(prediction => {
-                        drawFaceLandmarks(prediction.scaledMesh);
+                    // Desenhar pontos-chave
+                    ctx.fillStyle = 'red';
+                    face.landmarks.forEach(landmark => {
+                        ctx.beginPath();
+                        ctx.arc(landmark[0], landmark[1], 3, 0, 2 * Math.PI);
+                        ctx.fill();
                     });
-                }
+
+                    // Adicionar texto com probabilidade
+                    ctx.fillStyle = 'white';
+                    ctx.font = '16px Arial';
+                    ctx.fillText(
+                        `Confiança: ${(face.probability[0] * 100).toFixed(2)}%`,
+                        face.topLeft[0],
+                        face.topLeft[1] - 5
+                    );
+                });
 
             } catch (error) {
                 console.error('Erro na detecção:', error);
@@ -173,67 +122,14 @@
             isProcessing = false;
         }
 
-        function drawBox(bbox, color, label) {
-            const [x, y, width, height] = bbox;
-            ctx.strokeStyle = color;
-            ctx.lineWidth = 2;
-            ctx.strokeRect(x, y, width, height);
-            drawText(label, x, y - 5, color);
-        }
-
-        function drawHand(landmarks, color) {
-            // Desenha as conexões entre os pontos da mão
-            const connections = [
-                [0, 1], [1, 2], [2, 3], [3, 4],
-                [0, 5], [5, 6], [6, 7], [7, 8],
-                [0, 9], [9, 10], [10, 11], [11, 12],
-                [0, 13], [13, 14], [14, 15], [15, 16],
-                [0, 17], [17, 18], [18, 19], [19, 20]
-            ];
-
-            ctx.strokeStyle = color;
-            ctx.lineWidth = 2;
-
-            connections.forEach(([i, j]) => {
-                ctx.beginPath();
-                ctx.moveTo(landmarks[i][0], landmarks[i][1]);
-                ctx.lineTo(landmarks[j][0], landmarks[j][1]);
-                ctx.stroke();
-            });
-
-            // Desenha os pontos da mão
-            landmarks.forEach(point => {
-                ctx.fillStyle = color;
-                ctx.beginPath();
-                ctx.arc(point[0], point[1], 3, 0, 2 * Math.PI);
-                ctx.fill();
-            });
-        }
-
-        function drawFaceLandmarks(landmarks) {
-            ctx.fillStyle = 'white';
-            landmarks.forEach(point => {
-                ctx.beginPath();
-                ctx.arc(point[0], point[1], 1, 0, 2 * Math.PI);
-                ctx.fill();
-            });
-        }
-
-        function drawText(text, x, y, color) {
-            ctx.fillStyle = color;
-            ctx.font = '16px Arial';
-            ctx.fillText(text, x, y);
-        }
-
         function processFrame() {
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-            detectObjects();
+            detectFaces();
             requestAnimationFrame(processFrame);
         }
 
         async function start() {
             await setupCamera();
-            await loadModels();
+            await loadModel();
             processFrame();
         }
 
