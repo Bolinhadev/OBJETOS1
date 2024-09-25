@@ -3,24 +3,32 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Advanced Object and Hand Detection</title>
+  <title>Advanced Object and Hand Detection - Fullscreen Camera</title>
   <style>
+    body, html {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+    }
     video, canvas {
       position: absolute;
       top: 0;
       left: 0;
+      width: 100vw;
+      height: 100vh;
+      object-fit: cover;
     }
-    video {
-      z-index: -1;
+    canvas {
+      pointer-events: none; /* Disable interactions with the canvas */
     }
   </style>
 </head>
 <body>
 
 <!-- Video element to capture from the camera -->
-<video id="video" width="640" height="480" autoplay></video>
-<!-- Canvas to draw bounding boxes -->
-<canvas id="canvas" width="640" height="480"></canvas>
+<video id="video" autoplay></video>
+<!-- Canvas to draw bounding boxes and hand landmarks -->
+<canvas id="canvas"></canvas>
 
 <!-- Load TensorFlow.js -->
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"> </script>
@@ -39,6 +47,14 @@
 
   let cocoSsdModel;
   let efficientDetModel;
+
+  // Resize the canvas dynamically to match the window size
+  function resizeCanvas() {
+    canvasElement.width = window.innerWidth;
+    canvasElement.height = window.innerHeight;
+  }
+  window.addEventListener('resize', resizeCanvas);
+  resizeCanvas(); // Initial resize
 
   // Load COCO-SSD model for detecting people only
   cocoSsd.load().then(model => {
@@ -74,8 +90,8 @@
       await detectObjectsWithEfficientDet();
       await detectPeopleWithCocoSsd();
     },
-    width: 640,
-    height: 480
+    width: 1280,
+    height: 720
   });
   camera.start();
 
@@ -87,10 +103,16 @@
       predictions.forEach(prediction => {
         if (prediction.class === 'person') {
           const [x, y, width, height] = prediction.bbox;
-          
+
+          // Adjust bounding box for full-screen video
+          const adjustedX = x / videoElement.videoWidth * canvasElement.width;
+          const adjustedY = y / videoElement.videoHeight * canvasElement.height;
+          const adjustedWidth = width / videoElement.videoWidth * canvasElement.width;
+          const adjustedHeight = height / videoElement.videoHeight * canvasElement.height;
+
           // Draw bounding box for detected people by COCO-SSD
           canvasCtx.beginPath();
-          canvasCtx.rect(x, y, width, height);
+          canvasCtx.rect(adjustedX, adjustedY, adjustedWidth, adjustedHeight);
           canvasCtx.lineWidth = 2;
           canvasCtx.strokeStyle = 'blue';
           canvasCtx.stroke();
@@ -99,8 +121,8 @@
           canvasCtx.fillStyle = 'blue';
           canvasCtx.fillText(
             `Person - ${Math.round(prediction.score * 100)}%`,
-            x,
-            y > 10 ? y - 5 : 10
+            adjustedX,
+            adjustedY > 10 ? adjustedY - 5 : 10
           );
         }
       });
@@ -115,9 +137,15 @@
       predictions.forEach(prediction => {
         const [x, y, width, height] = prediction.bbox;
 
+        // Adjust bounding box for full-screen video
+        const adjustedX = x / videoElement.videoWidth * canvasElement.width;
+        const adjustedY = y / videoElement.videoHeight * canvasElement.height;
+        const adjustedWidth = width / videoElement.videoWidth * canvasElement.width;
+        const adjustedHeight = height / videoElement.videoHeight * canvasElement.height;
+
         // Draw bounding box for detected objects by EfficientDet
         canvasCtx.beginPath();
-        canvasCtx.rect(x, y, width, height);
+        canvasCtx.rect(adjustedX, adjustedY, adjustedWidth, adjustedHeight);
         canvasCtx.lineWidth = 2;
         canvasCtx.strokeStyle = 'green';
         canvasCtx.stroke();
@@ -126,8 +154,8 @@
         canvasCtx.fillStyle = 'green';
         canvasCtx.fillText(
           `${prediction.class} - ${Math.round(prediction.score * 100)}%`,
-          x,
-          y > 10 ? y - 5 : 10
+          adjustedX,
+          adjustedY > 10 ? adjustedY - 5 : 10
         );
       });
     }
