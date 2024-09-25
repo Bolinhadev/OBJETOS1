@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Detecção Otimizada de Objetos e Mãos</title>
+    <title>Detecção Completa e Robusta</title>
     <style>
         body, html {
             margin: 0;
@@ -15,6 +15,7 @@
             align-items: center;
             background-color: #000;
             overflow: hidden;
+            font-family: Arial, sans-serif;
         }
         #container {
             position: relative;
@@ -31,7 +32,7 @@
             width: auto;
             height: auto;
         }
-        #loading {
+        #loading, #error {
             position: fixed;
             top: 50%;
             left: 50%;
@@ -41,19 +42,38 @@
             padding: 20px;
             border-radius: 10px;
             z-index: 1000;
+            text-align: center;
+        }
+        #error {
+            display: none;
+            color: red;
+        }
+        #status {
+            position: fixed;
+            bottom: 10px;
+            left: 10px;
+            background-color: rgba(0,0,0,0.6);
+            color: white;
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 14px;
         }
     </style>
 </head>
 <body>
     <div id="container">
-        <video id="video" autoplay muted></video>
+        <video id="video" autoplay muted playsinline></video>
         <canvas id="canvas"></canvas>
     </div>
     <div id="loading">Carregando modelos...</div>
+    <div id="error">Erro ao inicializar. Por favor, recarregue a página.</div>
+    <div id="status"></div>
 
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils"></script>
     <script>
@@ -61,55 +81,94 @@
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d');
         const loadingElement = document.getElementById('loading');
+        const errorElement = document.getElementById('error');
+        const statusElement = document.getElementById('status');
 
-        let mobileNetModel;
-        let handsModel;
+        let mobileNetModel, handsModel, poseModel, faceMeshModel;
         let camera;
         const confidenceThreshold = 0.3;
 
         async function setupCamera() {
-            const stream = await navigator.mediaDevices.getUserMedia({ 
-                video: { width: 640, height: 480, facingMode: 'environment' } 
-            });
-            video.srcObject = stream;
-            return new Promise(resolve => {
-                video.onloadedmetadata = () => {
-                    video.play();
-                    canvas.width = video.videoWidth;
-                    canvas.height = video.videoHeight;
-                    resolve();
-                };
-            });
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { width: 640, height: 480, facingMode: 'environment' } 
+                });
+                video.srcObject = stream;
+                return new Promise(resolve => {
+                    video.onloadedmetadata = () => {
+                        video.play();
+                        canvas.width = video.videoWidth;
+                        canvas.height = video.videoHeight;
+                        resolve();
+                    };
+                });
+            } catch (error) {
+                console.error('Erro ao configurar câmera:', error);
+                throw error;
+            }
         }
 
         async function loadModels() {
-            mobileNetModel = await mobilenet.load({ version: 2, alpha: 1.0 });
-            handsModel = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
-            await handsModel.setOptions({
-                maxNumHands: 2,
-                modelComplexity: 0,
-                minDetectionConfidence: 0.5,
-                minTrackingConfidence: 0.5
-            });
-            handsModel.onResults(onHandResults);
-            loadingElement.style.display = 'none';
+            try {
+                mobileNetModel = await mobilenet.load({ version: 2, alpha: 1.0 });
+                updateStatus('MobileNet carregado');
+
+                handsModel = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+                await handsModel.setOptions({
+                    maxNumHands: 2,
+                    modelComplexity: 0,
+                    minDetectionConfidence: 0.5,
+                    minTrackingConfidence: 0.5
+                });
+                handsModel.onResults(onHandResults);
+                updateStatus('Modelo de mãos carregado');
+
+                poseModel = new Pose({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`});
+                await poseModel.setOptions({
+                    modelComplexity: 0,
+                    smoothLandmarks: true,
+                    minDetectionConfidence: 0.5,
+                    minTrackingConfidence: 0.5
+                });
+                poseModel.onResults(onPoseResults);
+                updateStatus('Modelo de pose carregado');
+
+                faceMeshModel = new FaceMesh({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`});
+                await faceMeshModel.setOptions({
+                    maxNumFaces: 1,
+                    refineLandmarks: true,
+                    minDetectionConfidence: 0.5,
+                    minTrackingConfidence: 0.5
+                });
+                faceMeshModel.onResults(onFaceMeshResults);
+                updateStatus('Modelo de face carregado');
+
+                loadingElement.style.display = 'none';
+            } catch (error) {
+                console.error('Erro ao carregar modelos:', error);
+                throw error;
+            }
         }
 
         async function detectObjects() {
-            const predictions = await mobileNetModel.classify(video);
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            try {
+                const predictions = await mobileNetModel.classify(video);
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-            predictions.forEach((prediction, index) => {
-                if (prediction.probability > confidenceThreshold) {
-                    const y = 30 + index * 30;
-                    ctx.fillStyle = 'rgba(0, 255, 0, 0.5)';
-                    ctx.fillRect(10, y - 20, 300, 25);
-                    ctx.fillStyle = 'white';
-                    ctx.font = '16px Arial';
-                    ctx.fillText(`${prediction.className} (${Math.round(prediction.probability * 100)}%)`, 15, y);
-                }
-            });
+                predictions.forEach((prediction, index) => {
+                    if (prediction.probability > confidenceThreshold) {
+                        const y = 30 + index * 30;
+                        ctx.fillStyle = 'rgba(0, 255, 0, 0.5)';
+                        ctx.fillRect(10, y - 20, 300, 25);
+                        ctx.fillStyle = 'white';
+                        ctx.font = '16px Arial';
+                        ctx.fillText(`${prediction.className} (${Math.round(prediction.probability * 100)}%)`, 15, y);
+                    }
+                });
+            } catch (error) {
+                console.error('Erro na detecção de objetos:', error);
+            }
 
             requestAnimationFrame(detectObjects);
         }
@@ -123,22 +182,63 @@
             }
         }
 
+        function onPoseResults(results) {
+            if (results.poseLandmarks) {
+                drawConnectors(ctx, results.poseLandmarks, POSE_CONNECTIONS, {color: '#00FFFF', lineWidth: 2});
+                drawLandmarks(ctx, results.poseLandmarks, {color: '#FFFF00', lineWidth: 1});
+            }
+        }
+
+        function onFaceMeshResults(results) {
+            if (results.multiFaceLandmarks) {
+                for (const landmarks of results.multiFaceLandmarks) {
+                    drawConnectors(ctx, landmarks, FACEMESH_TESSELATION, {color: '#C0C0C070', lineWidth: 1});
+                    drawConnectors(ctx, landmarks, FACEMESH_RIGHT_EYE, {color: '#FF3030', lineWidth: 1});
+                    drawConnectors(ctx, landmarks, FACEMESH_LEFT_EYE, {color: '#30FF30', lineWidth: 1});
+                    drawConnectors(ctx, landmarks, FACEMESH_RIGHT_EYEBROW, {color: '#FF3030', lineWidth: 1});
+                    drawConnectors(ctx, landmarks, FACEMESH_LEFT_EYEBROW, {color: '#30FF30', lineWidth: 1});
+                    drawConnectors(ctx, landmarks, FACEMESH_FACE_OVAL, {color: '#E0E0E0', lineWidth: 1});
+                    drawConnectors(ctx, landmarks, FACEMESH_LIPS, {color: '#E0E0E0', lineWidth: 1});
+                }
+            }
+        }
+
         async function startCamera() {
-            camera = new Camera(video, {
-                onFrame: async () => {
-                    await handsModel.send({image: video});
-                },
-                width: 640,
-                height: 480
-            });
-            camera.start();
+            try {
+                camera = new Camera(video, {
+                    onFrame: async () => {
+                        await handsModel.send({image: video});
+                        await poseModel.send({image: video});
+                        await faceMeshModel.send({image: video});
+                    },
+                    width: 640,
+                    height: 480
+                });
+                await camera.start();
+                updateStatus('Câmera iniciada');
+            } catch (error) {
+                console.error('Erro ao iniciar câmera:', error);
+                throw error;
+            }
+        }
+
+        function updateStatus(message) {
+            statusElement.textContent = message;
+            console.log(message);
         }
 
         async function start() {
-            await setupCamera();
-            await loadModels();
-            await startCamera();
-            detectObjects();
+            try {
+                await setupCamera();
+                await loadModels();
+                await startCamera();
+                detectObjects();
+                updateStatus('Todos os sistemas funcionando');
+            } catch (error) {
+                console.error('Erro na inicialização:', error);
+                errorElement.style.display = 'block';
+                loadingElement.style.display = 'none';
+            }
         }
 
         start();
