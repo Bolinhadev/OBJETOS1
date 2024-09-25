@@ -1,230 +1,79 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="pt-BR">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Advanced Object and Hand Detection - Fullscreen Camera</title>
+  <title>Detecção de Objetos com Múltiplos Modelos</title>
   <style>
-    body, html {
-      margin: 0;
-      padding: 0;
-      overflow: hidden;
-    }
-    video, canvas {
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 100vw;
-      height: 100vh;
-      object-fit: cover;
-    }
-    #debug {
-      position: absolute;
-      top: 10px;
-      left: 10px;
-      color: white;
-      font-size: 16px;
-      background-color: rgba(0, 0, 0, 0.5);
-      padding: 10px;
-      border-radius: 5px;
-      z-index: 10;
-    }
-    canvas {
-      pointer-events: none; /* Disable interactions with the canvas */
-    }
+    body { margin: 0; padding: 0; overflow: hidden; }
+    video, canvas { position: absolute; top: 0; left: 0; }
+    video { z-index: -1; }
   </style>
 </head>
 <body>
+  <video id="video" width="640" height="480" autoplay muted></video>
+  <canvas id="canvas" width="640" height="480"></canvas>
 
-<!-- Video element to capture from the camera -->
-<video id="video" autoplay playsinline></video>
-<!-- Canvas to draw bounding boxes and hand landmarks -->
-<canvas id="canvas"></canvas>
-<!-- Debug messages -->
-<div id="debug">Trying to access the camera...</div>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
 
-<!-- Load TensorFlow.js -->
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"> </script>
-<!-- Load COCO-SSD model for detecting people only -->
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"> </script>
-<!-- Load EfficientDet model for detecting a wide range of objects -->
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/efficientdet"></script>
-<!-- Load MediaPipe Holistic for detecting hands -->
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/holistic/holistic.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+  <script>
+    const videoElement = document.getElementById('video');
+    const canvasElement = document.getElementById('canvas');
+    const canvasCtx = canvasElement.getContext('2d');
 
-<script>
-  const videoElement = document.getElementById('video');
-  const canvasElement = document.getElementById('canvas');
-  const canvasCtx = canvasElement.getContext('2d');
-  const debugElement = document.getElementById('debug');
+    let cocoSsdModel;
 
-  let cocoSsdModel;
-  let efficientDetModel;
-
-  // Resize the canvas dynamically to match the window size
-  function resizeCanvas() {
-    canvasElement.width = window.innerWidth;
-    canvasElement.height = window.innerHeight;
-  }
-  window.addEventListener('resize', resizeCanvas);
-  resizeCanvas(); // Initial resize
-
-  // Load COCO-SSD model for detecting people only
-  cocoSsd.load().then(model => {
-    cocoSsdModel = model;
-  });
-
-  // Load EfficientDet model for detecting a wide range of objects
-  efficientdet.load().then(model => {
-    efficientDetModel = model;
-  });
-
-  // Initialize MediaPipe Holistic for detecting hands
-  const holistic = new Holistic({
-    locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/holistic/${file}`
-  });
-
-  holistic.setOptions({
-    modelComplexity: 1,
-    smoothLandmarks: true,
-    enableSegmentation: false, // Disable full body segmentation
-    smoothSegmentation: false,
-    refineFaceLandmarks: false,
-    minDetectionConfidence: 0.5,
-    minTrackingConfidence: 0.5
-  });
-
-  holistic.onResults(onResults);
-
-  // Try to access the camera stream and display debug messages while attempting
-  async function initializeCamera() {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          width: { ideal: 1280 },
-          height: { ideal: 720 }
-        }
-      });
+    async function setupCamera() {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
       videoElement.srcObject = stream;
-      videoElement.play();
-
-      // Remove debug message once the camera is active
-      debugElement.style.display = 'none';
-
-      // Start processing the video frames
-      const camera = new Camera(videoElement, {
-        onFrame: async () => {
-          await holistic.send({image: videoElement});
-          await detectObjectsWithEfficientDet();
-          await detectPeopleWithCocoSsd();
-        },
-        width: 1280,
-        height: 720
-      });
-      camera.start();
-    } catch (error) {
-      debugElement.innerText = `Camera error: ${error.message}`;
-      console.error('Camera access error:', error);
-    }
-  }
-
-  // Function to detect people using COCO-SSD
-  async function detectPeopleWithCocoSsd() {
-    if (cocoSsdModel) {
-      const predictions = await cocoSsdModel.detect(videoElement);
-
-      predictions.forEach(prediction => {
-        if (prediction.class === 'person') {
-          const [x, y, width, height] = prediction.bbox;
-
-          // Adjust bounding box for full-screen video
-          const adjustedX = x / videoElement.videoWidth * canvasElement.width;
-          const adjustedY = y / videoElement.videoHeight * canvasElement.height;
-          const adjustedWidth = width / videoElement.videoWidth * canvasElement.width;
-          const adjustedHeight = height / videoElement.videoHeight * canvasElement.height;
-
-          // Draw bounding box for detected people by COCO-SSD
-          canvasCtx.beginPath();
-          canvasCtx.rect(adjustedX, adjustedY, adjustedWidth, adjustedHeight);
-          canvasCtx.lineWidth = 2;
-          canvasCtx.strokeStyle = 'blue';
-          canvasCtx.stroke();
-
-          // Draw label
-          canvasCtx.fillStyle = 'blue';
-          canvasCtx.fillText(
-            `Person - ${Math.round(prediction.score * 100)}%`,
-            adjustedX,
-            adjustedY > 10 ? adjustedY - 5 : 10
-          );
-        }
+      return new Promise((resolve) => {
+        videoElement.onloadedmetadata = () => {
+          resolve(videoElement);
+        };
       });
     }
-  }
 
-  // Function to detect objects using EfficientDet (for detecting 30+ objects)
-  async function detectObjectsWithEfficientDet() {
-    if (efficientDetModel) {
-      const predictions = await efficientDetModel.detect(videoElement);
-
-      predictions.forEach(prediction => {
-        const [x, y, width, height] = prediction.bbox;
-
-        // Adjust bounding box for full-screen video
-        const adjustedX = x / videoElement.videoWidth * canvasElement.width;
-        const adjustedY = y / videoElement.videoHeight * canvasElement.height;
-        const adjustedWidth = width / videoElement.videoWidth * canvasElement.width;
-        const adjustedHeight = height / videoElement.videoHeight * canvasElement.height;
-
-        // Draw bounding box for detected objects by EfficientDet
-        canvasCtx.beginPath();
-        canvasCtx.rect(adjustedX, adjustedY, adjustedWidth, adjustedHeight);
-        canvasCtx.lineWidth = 2;
-        canvasCtx.strokeStyle = 'green';
-        canvasCtx.stroke();
-
-        // Draw label
-        canvasCtx.fillStyle = 'green';
-        canvasCtx.fillText(
-          `${prediction.class} - ${Math.round(prediction.score * 100)}%`,
-          adjustedX,
-          adjustedY > 10 ? adjustedY - 5 : 10
-        );
-      });
+    async function loadModel() {
+      cocoSsdModel = await cocoSsd.load();
     }
-  }
 
-  // Function to handle results from MediaPipe (hand detection only)
-  function onResults(results) {
-    canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+    async function detectObjects() {
+      if (cocoSsdModel) {
+        const predictions = await cocoSsdModel.detect(videoElement);
+        
+        canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+        canvasCtx.drawImage(videoElement, 0, 0, canvasElement.width, canvasElement.height);
 
-    // Draw landmarks for hands (draw circles only on the hands)
-    if (results.leftHandLandmarks) {
-      drawLandmarks(results.leftHandLandmarks, 'red');
+        predictions.forEach(prediction => {
+          if (['cell phone', 'pencil', 'pen'].includes(prediction.class)) {
+            const [x, y, width, height] = prediction.bbox;
+            
+            canvasCtx.beginPath();
+            canvasCtx.rect(x, y, width, height);
+            canvasCtx.lineWidth = 2;
+            canvasCtx.strokeStyle = 'blue';
+            canvasCtx.stroke();
+
+            canvasCtx.fillStyle = 'blue';
+            canvasCtx.fillText(
+              `${prediction.class} - ${Math.round(prediction.score * 100)}%`,
+              x,
+              y > 10 ? y - 5 : 10
+            );
+          }
+        });
+      }
+      requestAnimationFrame(detectObjects);
     }
-    if (results.rightHandLandmarks) {
-      drawLandmarks(results.rightHandLandmarks, 'blue');
+
+    async function app() {
+      await setupCamera();
+      await loadModel();
+      detectObjects();
     }
-  }
 
-  // Function to draw landmarks for hands (circles on hand points)
-  function drawLandmarks(landmarks, color) {
-    landmarks.forEach(landmark => {
-      const x = landmark.x * canvasElement.width;
-      const y = landmark.y * canvasElement.height;
-
-      // Draw circle on each hand landmark
-      canvasCtx.beginPath();
-      canvasCtx.arc(x, y, 5, 0, 2 * Math.PI);
-      canvasCtx.fillStyle = color;
-      canvasCtx.fill();
-    });
-  }
-
-  // Start the camera and show debug messages if there's an issue
-  initializeCamera();
-</script>
-
+    app();
+  </script>
 </body>
 </html>
