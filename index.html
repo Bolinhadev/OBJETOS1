@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Detecção de Objetos com Tratamento de Erros de Câmera</title>
+    <title>Detecção de Objetos com YOLO v5</title>
     <style>
         body, html {
             margin: 0;
@@ -44,15 +44,6 @@
             z-index: 1000;
             text-align: center;
         }
-        #retry-button {
-            margin-top: 10px;
-            padding: 10px 20px;
-            background-color: #4CAF50;
-            color: white;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-        }
     </style>
 </head>
 <body>
@@ -60,86 +51,83 @@
         <video id="video" autoplay muted playsinline></video>
         <canvas id="canvas"></canvas>
     </div>
-    <div id="message">Iniciando câmera...</div>
+    <div id="message">Carregando modelo YOLO v5...</div>
 
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet"></script>
     <script>
         const video = document.getElementById('video');
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d');
         const messageElement = document.getElementById('message');
 
-        let mobileNetModel;
+        let model;
         const confidenceThreshold = 0.5;
+        const classNames = ['person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat', 'traffic light', 'fire hydrant', 'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe', 'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee', 'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat', 'baseball glove', 'skateboard', 'surfboard', 'tennis racket', 'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch', 'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop', 'mouse', 'remote', 'keyboard', 'cell phone', 'microwave', 'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock', 'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush'];
 
         async function setupCamera() {
-            const constraints = [
-                { video: { facingMode: 'environment' } },
-                { video: { facingMode: 'user' } },
-                { video: true },
-                { video: { width: { min: 640 }, height: { min: 480 } } },
-                { video: { width: { min: 320 }, height: { min: 240 } } }
-            ];
-
-            for (const constraint of constraints) {
-                try {
-                    const stream = await navigator.mediaDevices.getUserMedia(constraint);
-                    video.srcObject = stream;
-                    await new Promise(resolve => {
-                        video.onloadedmetadata = () => {
-                            video.play();
-                            canvas.width = video.videoWidth;
-                            canvas.height = video.videoHeight;
-                            resolve();
-                        };
-                    });
-                    messageElement.style.display = 'none';
-                    return;
-                } catch (error) {
-                    console.warn(`Falha ao usar constraint ${JSON.stringify(constraint)}:`, error);
-                }
-            }
-
-            throw new Error('Não foi possível iniciar a câmera com nenhuma das configurações');
+            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+            video.srcObject = stream;
+            return new Promise(resolve => {
+                video.onloadedmetadata = () => {
+                    video.play();
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    resolve();
+                };
+            });
         }
 
         async function loadModel() {
-            try {
-                messageElement.textContent = 'Carregando modelo...';
-                mobileNetModel = await mobilenet.load({ version: 2, alpha: 1.0 });
-                messageElement.style.display = 'none';
-            } catch (error) {
-                console.error('Erro ao carregar o modelo:', error);
-                messageElement.textContent = 'Erro ao carregar o modelo. Por favor, recarregue a página.';
-            }
+            messageElement.textContent = 'Carregando modelo YOLO v5...';
+            model = await tf.loadGraphModel('https://raw.githubusercontent.com/arnoldsandoval/yolo-tfjs-opencv/main/public/models/yolov5s/model.json');
+            messageElement.style.display = 'none';
+        }
+
+        function preprocess(video) {
+            const input = tf.tidy(() => {
+                const img = tf.browser.fromPixels(video);
+                const resized = tf.image.resizeBilinear(img, [640, 640]);
+                const normalized = resized.div(255.0);
+                return normalized.expandDims(0);
+            });
+            return input;
         }
 
         async function detectObjects() {
-            try {
-                const predictions = await mobileNetModel.classify(video);
-                
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            tf.engine().startScope();
+            const input = preprocess(video);
+            const result = await model.executeAsync(input);
+            const [boxes, scores, classes] = result;
+            const boxesData = boxes.dataSync();
+            const scoresData = scores.dataSync();
+            const classesData = classes.dataSync();
 
-                predictions.forEach((prediction, index) => {
-                    if (prediction.probability > confidenceThreshold) {
-                        const y = 30 + index * 30;
-                        ctx.fillStyle = 'rgba(0, 255, 0, 0.5)';
-                        ctx.fillRect(10, y - 20, 300, 25);
-                        ctx.fillStyle = 'white';
-                        ctx.font = '16px Arial';
-                        ctx.fillText(`${prediction.className} (${Math.round(prediction.probability * 100)}%)`, 15, y);
-                    }
-                });
+            tf.dispose([input, ...result]);
 
-                requestAnimationFrame(detectObjects);
-            } catch (error) {
-                console.error('Erro na detecção de objetos:', error);
-                messageElement.textContent = 'Erro na detecção. Tentando reiniciar...';
-                messageElement.style.display = 'block';
-                setTimeout(start, 2000);
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+            for (let i = 0; i < boxesData.length / 4; i++) {
+                if (scoresData[i] > confidenceThreshold) {
+                    const [y1, x1, y2, x2] = boxesData.slice(i * 4, (i + 1) * 4);
+                    const width = x2 - x1;
+                    const height = y2 - y1;
+
+                    ctx.strokeStyle = 'red';
+                    ctx.lineWidth = 2;
+                    ctx.strokeRect(x1 * canvas.width, y1 * canvas.height, width * canvas.width, height * canvas.height);
+
+                    const className = classNames[classesData[i]];
+                    const score = scoresData[i].toFixed(2);
+
+                    ctx.fillStyle = 'red';
+                    ctx.font = '16px Arial';
+                    ctx.fillText(`${className} ${score}`, x1 * canvas.width, y1 * canvas.height - 5);
+                }
             }
+
+            tf.engine().endScope();
+            requestAnimationFrame(detectObjects);
         }
 
         async function start() {
@@ -149,12 +137,7 @@
                 detectObjects();
             } catch (error) {
                 console.error('Erro ao iniciar:', error);
-                messageElement.innerHTML = `
-                    Erro ao iniciar a câmera ou carregar o modelo.<br>
-                    Por favor, verifique as permissões da câmera e tente novamente.<br>
-                    <button id="retry-button">Tentar Novamente</button>
-                `;
-                document.getElementById('retry-button').onclick = start;
+                messageElement.textContent = 'Erro ao iniciar a câmera ou carregar o modelo. Por favor, recarregue a página.';
             }
         }
 
