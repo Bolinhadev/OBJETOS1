@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Detecção Otimizada de Objetos e Pose</title>
+    <title>Detecção de Objetos com Tratamento de Erros de Câmera</title>
     <style>
         body, html {
             margin: 0;
@@ -32,7 +32,7 @@
             width: auto;
             height: auto;
         }
-        #loading {
+        #message {
             position: fixed;
             top: 50%;
             left: 50%;
@@ -42,6 +42,16 @@
             padding: 20px;
             border-radius: 10px;
             z-index: 1000;
+            text-align: center;
+        }
+        #retry-button {
+            margin-top: 10px;
+            padding: 10px 20px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
         }
     </style>
 </head>
@@ -50,119 +60,102 @@
         <video id="video" autoplay muted playsinline></video>
         <canvas id="canvas"></canvas>
     </div>
-    <div id="loading">Carregando modelos...</div>
+    <div id="message">Iniciando câmera...</div>
 
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/posenet"></script>
     <script>
         const video = document.getElementById('video');
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d');
-        const loadingElement = document.getElementById('loading');
+        const messageElement = document.getElementById('message');
 
-        let mobileNetModel, poseNetModel;
+        let mobileNetModel;
         const confidenceThreshold = 0.5;
 
         async function setupCamera() {
-            const stream = await navigator.mediaDevices.getUserMedia({ 
-                video: { width: 640, height: 480, facingMode: 'environment' } 
-            });
-            video.srcObject = stream;
-            return new Promise(resolve => {
-                video.onloadedmetadata = () => {
-                    video.play();
-                    canvas.width = video.videoWidth;
-                    canvas.height = video.videoHeight;
-                    resolve();
-                };
-            });
-        }
-
-        async function loadModels() {
-            mobileNetModel = await mobilenet.load({ version: 2, alpha: 1.0 });
-            poseNetModel = await posenet.load({
-                architecture: 'MobileNetV1',
-                outputStride: 16,
-                inputResolution: { width: 640, height: 480 },
-                multiplier: 0.75
-            });
-            loadingElement.style.display = 'none';
-        }
-
-        async function detectObjectsAndPose() {
-            // Objeto detecção
-            const predictions = await mobileNetModel.classify(video);
-            
-            // Pose detecção
-            const pose = await poseNetModel.estimateSinglePose(video, {
-                flipHorizontal: false
-            });
-
-            // Limpar canvas
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-            // Desenhar detecções de objetos
-            predictions.forEach((prediction, index) => {
-                if (prediction.probability > confidenceThreshold) {
-                    const y = 30 + index * 30;
-                    ctx.fillStyle = 'rgba(0, 255, 0, 0.5)';
-                    ctx.fillRect(10, y - 20, 300, 25);
-                    ctx.fillStyle = 'white';
-                    ctx.font = '16px Arial';
-                    ctx.fillText(`${prediction.className} (${Math.round(prediction.probability * 100)}%)`, 15, y);
-                }
-            });
-
-            // Desenhar pose
-            drawKeypoints(pose.keypoints);
-            drawSkeleton(pose.keypoints);
-
-            requestAnimationFrame(detectObjectsAndPose);
-        }
-
-        function drawKeypoints(keypoints) {
-            keypoints.forEach(keypoint => {
-                if (keypoint.score > confidenceThreshold) {
-                    const { y, x } = keypoint.position;
-                    ctx.beginPath();
-                    ctx.arc(x, y, 5, 0, 2 * Math.PI);
-                    ctx.fillStyle = 'red';
-                    ctx.fill();
-                }
-            });
-        }
-
-        function drawSkeleton(keypoints) {
-            const skeleton = [
-                ['nose', 'leftEye'], ['leftEye', 'leftEar'], ['nose', 'rightEye'], ['rightEye', 'rightEar'],
-                ['leftShoulder', 'rightShoulder'], ['leftShoulder', 'leftElbow'],
-                ['leftElbow', 'leftWrist'], ['rightShoulder', 'rightElbow'], ['rightElbow', 'rightWrist'],
-                ['leftShoulder', 'leftHip'], ['rightShoulder', 'rightHip'], ['leftHip', 'rightHip'],
-                ['leftHip', 'leftKnee'], ['leftKnee', 'leftAnkle'], ['rightHip', 'rightKnee'],
-                ['rightKnee', 'rightAnkle']
+            const constraints = [
+                { video: { facingMode: 'environment' } },
+                { video: { facingMode: 'user' } },
+                { video: true },
+                { video: { width: { min: 640 }, height: { min: 480 } } },
+                { video: { width: { min: 320 }, height: { min: 240 } } }
             ];
 
-            skeleton.forEach(([startPoint, endPoint]) => {
-                const start = keypoints.find(kp => kp.part === startPoint);
-                const end = keypoints.find(kp => kp.part === endPoint);
-
-                if (start && end && start.score > confidenceThreshold && end.score > confidenceThreshold) {
-                    ctx.beginPath();
-                    ctx.moveTo(start.position.x, start.position.y);
-                    ctx.lineTo(end.position.x, end.position.y);
-                    ctx.strokeStyle = 'blue';
-                    ctx.lineWidth = 2;
-                    ctx.stroke();
+            for (const constraint of constraints) {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia(constraint);
+                    video.srcObject = stream;
+                    await new Promise(resolve => {
+                        video.onloadedmetadata = () => {
+                            video.play();
+                            canvas.width = video.videoWidth;
+                            canvas.height = video.videoHeight;
+                            resolve();
+                        };
+                    });
+                    messageElement.style.display = 'none';
+                    return;
+                } catch (error) {
+                    console.warn(`Falha ao usar constraint ${JSON.stringify(constraint)}:`, error);
                 }
-            });
+            }
+
+            throw new Error('Não foi possível iniciar a câmera com nenhuma das configurações');
+        }
+
+        async function loadModel() {
+            try {
+                messageElement.textContent = 'Carregando modelo...';
+                mobileNetModel = await mobilenet.load({ version: 2, alpha: 1.0 });
+                messageElement.style.display = 'none';
+            } catch (error) {
+                console.error('Erro ao carregar o modelo:', error);
+                messageElement.textContent = 'Erro ao carregar o modelo. Por favor, recarregue a página.';
+            }
+        }
+
+        async function detectObjects() {
+            try {
+                const predictions = await mobileNetModel.classify(video);
+                
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+                predictions.forEach((prediction, index) => {
+                    if (prediction.probability > confidenceThreshold) {
+                        const y = 30 + index * 30;
+                        ctx.fillStyle = 'rgba(0, 255, 0, 0.5)';
+                        ctx.fillRect(10, y - 20, 300, 25);
+                        ctx.fillStyle = 'white';
+                        ctx.font = '16px Arial';
+                        ctx.fillText(`${prediction.className} (${Math.round(prediction.probability * 100)}%)`, 15, y);
+                    }
+                });
+
+                requestAnimationFrame(detectObjects);
+            } catch (error) {
+                console.error('Erro na detecção de objetos:', error);
+                messageElement.textContent = 'Erro na detecção. Tentando reiniciar...';
+                messageElement.style.display = 'block';
+                setTimeout(start, 2000);
+            }
         }
 
         async function start() {
-            await setupCamera();
-            await loadModels();
-            detectObjectsAndPose();
+            try {
+                await setupCamera();
+                await loadModel();
+                detectObjects();
+            } catch (error) {
+                console.error('Erro ao iniciar:', error);
+                messageElement.innerHTML = `
+                    Erro ao iniciar a câmera ou carregar o modelo.<br>
+                    Por favor, verifique as permissões da câmera e tente novamente.<br>
+                    <button id="retry-button">Tentar Novamente</button>
+                `;
+                document.getElementById('retry-button').onclick = start;
+            }
         }
 
         start();
