@@ -3,77 +3,76 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Detecção de Objetos com Múltiplos Modelos</title>
+  <title>Detecção de Objetos Simplificada</title>
   <style>
-    body { margin: 0; padding: 0; overflow: hidden; }
+    body { margin: 0; display: flex; justify-content: center; align-items: center; height: 100vh; background-color: #f0f0f0; }
+    #container { position: relative; }
     video, canvas { position: absolute; top: 0; left: 0; }
-    video { z-index: -1; }
   </style>
 </head>
 <body>
-  <video id="video" width="640" height="480" autoplay muted></video>
-  <canvas id="canvas" width="640" height="480"></canvas>
+  <div id="container">
+    <video id="video" width="640" height="480" autoplay muted></video>
+    <canvas id="canvas" width="640" height="480"></canvas>
+  </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
 
   <script>
-    const videoElement = document.getElementById('video');
-    const canvasElement = document.getElementById('canvas');
-    const canvasCtx = canvasElement.getContext('2d');
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
 
-    let cocoSsdModel;
+    let model;
 
     async function setupCamera() {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-      videoElement.srcObject = stream;
-      return new Promise((resolve) => {
-        videoElement.onloadedmetadata = () => {
-          resolve(videoElement);
-        };
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      video.srcObject = stream;
+      return new Promise(resolve => {
+        video.onloadedmetadata = () => resolve();
       });
     }
 
     async function loadModel() {
-      cocoSsdModel = await cocoSsd.load();
+      model = await cocoSsd.load();
     }
 
     async function detectObjects() {
-      if (cocoSsdModel) {
-        const predictions = await cocoSsdModel.detect(videoElement);
+      const predictions = await model.detect(video);
+      
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      predictions.forEach(prediction => {
+        const [x, y, width, height] = prediction.bbox;
         
-        canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-        canvasCtx.drawImage(videoElement, 0, 0, canvasElement.width, canvasElement.height);
+        // Desenha a caixa
+        ctx.strokeStyle = 'red';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x, y, width, height);
 
-        predictions.forEach(prediction => {
-          if (['cell phone', 'pencil', 'pen'].includes(prediction.class)) {
-            const [x, y, width, height] = prediction.bbox;
-            
-            canvasCtx.beginPath();
-            canvasCtx.rect(x, y, width, height);
-            canvasCtx.lineWidth = 2;
-            canvasCtx.strokeStyle = 'blue';
-            canvasCtx.stroke();
+        // Desenha o fundo do texto
+        ctx.fillStyle = 'rgba(255, 0, 0, 0.5)';
+        ctx.fillRect(x, y - 20, width, 20);
 
-            canvasCtx.fillStyle = 'blue';
-            canvasCtx.fillText(
-              `${prediction.class} - ${Math.round(prediction.score * 100)}%`,
-              x,
-              y > 10 ? y - 5 : 10
-            );
-          }
-        });
-      }
+        // Desenha o texto
+        ctx.fillStyle = 'white';
+        ctx.font = '16px Arial';
+        ctx.fillText(prediction.class, x + 5, y - 5);
+      });
+
       requestAnimationFrame(detectObjects);
     }
 
-    async function app() {
+    async function start() {
       await setupCamera();
       await loadModel();
+      video.play();
       detectObjects();
     }
 
-    app();
+    start();
   </script>
 </body>
 </html>
