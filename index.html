@@ -18,6 +18,17 @@
       height: 100vh;
       object-fit: cover;
     }
+    #debug {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      color: white;
+      font-size: 16px;
+      background-color: rgba(0, 0, 0, 0.5);
+      padding: 10px;
+      border-radius: 5px;
+      z-index: 10;
+    }
     canvas {
       pointer-events: none; /* Disable interactions with the canvas */
     }
@@ -26,9 +37,11 @@
 <body>
 
 <!-- Video element to capture from the camera -->
-<video id="video" autoplay></video>
+<video id="video" autoplay playsinline></video>
 <!-- Canvas to draw bounding boxes and hand landmarks -->
 <canvas id="canvas"></canvas>
+<!-- Debug messages -->
+<div id="debug">Trying to access the camera...</div>
 
 <!-- Load TensorFlow.js -->
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"> </script>
@@ -44,6 +57,7 @@
   const videoElement = document.getElementById('video');
   const canvasElement = document.getElementById('canvas');
   const canvasCtx = canvasElement.getContext('2d');
+  const debugElement = document.getElementById('debug');
 
   let cocoSsdModel;
   let efficientDetModel;
@@ -83,17 +97,37 @@
 
   holistic.onResults(onResults);
 
-  // Set up the camera stream
-  const camera = new Camera(videoElement, {
-    onFrame: async () => {
-      await holistic.send({image: videoElement});
-      await detectObjectsWithEfficientDet();
-      await detectPeopleWithCocoSsd();
-    },
-    width: 1280,
-    height: 720
-  });
-  camera.start();
+  // Try to access the camera stream and display debug messages while attempting
+  async function initializeCamera() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        }
+      });
+      videoElement.srcObject = stream;
+      videoElement.play();
+
+      // Remove debug message once the camera is active
+      debugElement.style.display = 'none';
+
+      // Start processing the video frames
+      const camera = new Camera(videoElement, {
+        onFrame: async () => {
+          await holistic.send({image: videoElement});
+          await detectObjectsWithEfficientDet();
+          await detectPeopleWithCocoSsd();
+        },
+        width: 1280,
+        height: 720
+      });
+      camera.start();
+    } catch (error) {
+      debugElement.innerText = `Camera error: ${error.message}`;
+      console.error('Camera access error:', error);
+    }
+  }
 
   // Function to detect people using COCO-SSD
   async function detectPeopleWithCocoSsd() {
@@ -188,6 +222,8 @@
     });
   }
 
+  // Start the camera and show debug messages if there's an issue
+  initializeCamera();
 </script>
 
 </body>
