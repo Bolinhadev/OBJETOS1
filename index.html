@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Detecção de Objetos Estável e Fluida</title>
+    <title>Detecção Detalhada de Pessoas e Objetos</title>
     <style>
         body, html {
             margin: 0;
@@ -53,7 +53,10 @@
 
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/blazeface"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/handpose"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/body-pix"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/face-landmarks-detection"></script>
     <script>
         const video = document.getElementById('video');
         const canvas = document.getElementById('canvas');
@@ -61,14 +64,11 @@
         const loadingElement = document.getElementById('loading');
         const progressElement = document.getElementById('progress');
 
-        let cocoSsdModel, mobilenetModel;
-        let detectionBuffer = [];
-        const bufferSize = 5;
-        let lastDetectionTime = 0;
-        const detectionInterval = 100; // milissegundos
+        let cocoSsdModel, blazefaceModel, handposeModel, bodyPixModel, faceLandmarksModel;
+        let isProcessing = false;
 
         async function setupCamera() {
-            const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+            const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
             video.srcObject = stream;
             return new Promise(resolve => {
                 video.onloadedmetadata = () => {
@@ -82,7 +82,9 @@
 
         async function loadModel(modelLoader, name) {
             try {
-                return await modelLoader();
+                const model = await modelLoader();
+                console.log(`${name} carregado.`);
+                return model;
             } catch (error) {
                 console.error(`Erro ao carregar ${name}:`, error);
                 return null;
@@ -90,7 +92,7 @@
         }
 
         async function loadModels() {
-            const totalModels = 2;
+            const totalModels = 5;
             let loadedModels = 0;
 
             const updateProgress = () => {
@@ -99,71 +101,76 @@
                 progressElement.textContent = `${progress}%`;
             };
 
-            [cocoSsdModel, mobilenetModel] = await Promise.all([
+            [cocoSsdModel, blazefaceModel, handposeModel, bodyPixModel, faceLandmarksModel] = await Promise.all([
                 loadModel(() => cocoSsd.load(), 'COCO-SSD').then(model => { updateProgress(); return model; }),
-                loadModel(() => mobilenet.load(), 'MobileNet').then(model => { updateProgress(); return model; })
+                loadModel(() => blazeface.load(), 'BlazeFace').then(model => { updateProgress(); return model; }),
+                loadModel(() => handpose.load(), 'HandPose').then(model => { updateProgress(); return model; }),
+                loadModel(() => bodyPix.load(), 'BodyPix').then(model => { updateProgress(); return model; }),
+                loadModel(() => faceLandmarksDetection.load(faceLandmarksDetection.SupportedPackages.mediapipeFacemesh), 'FaceLandmarks').then(model => { updateProgress(); return model; })
             ]);
 
             loadingElement.style.display = 'none';
         }
 
         async function detectObjects() {
-            const now = Date.now();
-            if (now - lastDetectionTime < detectionInterval) return;
-            lastDetectionTime = now;
+            if (isProcessing) return;
+            isProcessing = true;
 
             try {
+                // COCO-SSD detection
                 if (cocoSsdModel) {
                     const cocoDetections = await cocoSsdModel.detect(video);
-                    updateDetectionBuffer(cocoDetections);
+                    cocoDetections.forEach(detection => {
+                        if (detection.class === 'person') {
+                            drawBox(detection.bbox, 'red', `Pessoa (${Math.round(detection.score * 100)}%)`);
+                        } else {
+                            drawBox(detection.bbox, 'blue', `${detection.class} (${Math.round(detection.score * 100)}%)`);
+                        }
+                    });
                 }
 
-                if (mobilenetModel) {
-                    const mobilenetClassification = await mobilenetModel.classify(video);
-                    if (mobilenetClassification.length > 0) {
-                        const topPrediction = mobilenetClassification[0];
-                        drawText(`${topPrediction.className} (${Math.round(topPrediction.probability * 100)}%)`, 10, canvas.height - 10, 'blue');
-                    }
+                // BlazeFace detection
+                if (blazefaceModel) {
+                    const blazefaceDetections = await blazefaceModel.estimateFaces(video, false);
+                    blazefaceDetections.forEach(face => {
+                        drawBox([face.topLeft[0], face.topLeft[1], face.bottomRight[0] - face.topLeft[0], face.bottomRight[1] - face.topLeft[1]], 'green', 'Rosto');
+                    });
                 }
+
+                // HandPose detection
+                if (handposeModel) {
+                    const hands = await handposeModel.estimateHands(video);
+                    hands.forEach(hand => {
+                        drawHand(hand.landmarks, 'yellow');
+                    });
+                }
+
+                // BodyPix segmentation
+                if (bodyPixModel) {
+                    const segmentation = await bodyPixModel.segmentPersonParts(video);
+                    const coloredPartImage = bodyPix.toColoredPartMask(segmentation);
+                    const opacity = 0.7;
+                    const flipHorizontal = false;
+                    const maskBlurAmount = 0;
+                    bodyPix.drawMask(
+                        canvas, video, coloredPartImage, opacity, maskBlurAmount,
+                        flipHorizontal
+                    );
+                }
+
+                // Face Landmarks detection
+                if (faceLandmarksModel) {
+                    const predictions = await faceLandmarksModel.estimateFaces({input: video});
+                    predictions.forEach(prediction => {
+                        drawFaceLandmarks(prediction.scaledMesh);
+                    });
+                }
+
             } catch (error) {
                 console.error('Erro na detecção:', error);
             }
-        }
 
-        function updateDetectionBuffer(newDetections) {
-            detectionBuffer.push(newDetections);
-            if (detectionBuffer.length > bufferSize) {
-                detectionBuffer.shift();
-            }
-        }
-
-        function getAverageDetections() {
-            const allDetections = detectionBuffer.flat();
-            const groupedDetections = {};
-
-            allDetections.forEach(detection => {
-                if (!groupedDetections[detection.class]) {
-                    groupedDetections[detection.class] = [];
-                }
-                groupedDetections[detection.class].push(detection);
-            });
-
-            return Object.values(groupedDetections).map(group => {
-                const avgDetection = group.reduce((acc, det) => {
-                    acc.score += det.score;
-                    acc.bbox[0] += det.bbox[0];
-                    acc.bbox[1] += det.bbox[1];
-                    acc.bbox[2] += det.bbox[2];
-                    acc.bbox[3] += det.bbox[3];
-                    return acc;
-                }, { class: group[0].class, score: 0, bbox: [0, 0, 0, 0] });
-
-                const count = group.length;
-                avgDetection.score /= count;
-                avgDetection.bbox = avgDetection.bbox.map(v => v / count);
-
-                return avgDetection;
-            });
+            isProcessing = false;
         }
 
         function drawBox(bbox, color, label) {
@@ -174,6 +181,44 @@
             drawText(label, x, y - 5, color);
         }
 
+        function drawHand(landmarks, color) {
+            // Desenha as conexões entre os pontos da mão
+            const connections = [
+                [0, 1], [1, 2], [2, 3], [3, 4],
+                [0, 5], [5, 6], [6, 7], [7, 8],
+                [0, 9], [9, 10], [10, 11], [11, 12],
+                [0, 13], [13, 14], [14, 15], [15, 16],
+                [0, 17], [17, 18], [18, 19], [19, 20]
+            ];
+
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 2;
+
+            connections.forEach(([i, j]) => {
+                ctx.beginPath();
+                ctx.moveTo(landmarks[i][0], landmarks[i][1]);
+                ctx.lineTo(landmarks[j][0], landmarks[j][1]);
+                ctx.stroke();
+            });
+
+            // Desenha os pontos da mão
+            landmarks.forEach(point => {
+                ctx.fillStyle = color;
+                ctx.beginPath();
+                ctx.arc(point[0], point[1], 3, 0, 2 * Math.PI);
+                ctx.fill();
+            });
+        }
+
+        function drawFaceLandmarks(landmarks) {
+            ctx.fillStyle = 'white';
+            landmarks.forEach(point => {
+                ctx.beginPath();
+                ctx.arc(point[0], point[1], 1, 0, 2 * Math.PI);
+                ctx.fill();
+            });
+        }
+
         function drawText(text, x, y, color) {
             ctx.fillStyle = color;
             ctx.font = '16px Arial';
@@ -182,12 +227,6 @@
 
         function processFrame() {
             ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-            
-            const averageDetections = getAverageDetections();
-            averageDetections.forEach(detection => {
-                drawBox(detection.bbox, 'red', `${detection.class} (${Math.round(detection.score * 100)}%)`);
-            });
-
             detectObjects();
             requestAnimationFrame(processFrame);
         }
