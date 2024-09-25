@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Detecção de Objetos com COCO-SSD</title>
+    <title>Detecção de Objetos com EfficientDet</title>
     <style>
         body, html {
             margin: 0;
@@ -63,7 +63,7 @@
     <div id="message">Inicializando...</div>
 
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/automl"></script>
     <script>
         const video = document.getElementById('video');
         const canvas = document.getElementById('canvas');
@@ -71,6 +71,7 @@
         const messageElement = document.getElementById('message');
 
         let model;
+        const confidenceThreshold = 0.5;
 
         async function setupCamera() {
             messageElement.textContent = 'Inicializando câmera...';
@@ -103,25 +104,27 @@
         }
 
         async function loadModel() {
-            messageElement.textContent = 'Carregando modelo COCO-SSD...';
+            messageElement.textContent = 'Carregando modelo EfficientDet...';
             try {
-                model = await cocoSsd.load();
+                model = await automl.loadObjectDetection('https://storage.googleapis.com/tfjs-automl/object-detection-effd2-model/model.json');
                 messageElement.style.display = 'none';
             } catch (error) {
                 console.error('Erro ao carregar o modelo:', error);
-                throw new Error('Não foi possível carregar o modelo COCO-SSD');
+                throw new Error('Não foi possível carregar o modelo EfficientDet');
             }
         }
 
         async function detectObjects() {
             try {
-                const predictions = await model.detect(video);
+                const predictions = await model.detect(video, { score: confidenceThreshold });
                 
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
                 ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
                 predictions.forEach(prediction => {
-                    const [x, y, width, height] = prediction.bbox;
+                    const { box, label, score } = prediction;
+                    const [x, y, width, height] = box;
+
                     ctx.strokeStyle = 'red';
                     ctx.lineWidth = 2;
                     ctx.strokeRect(x, y, width, height);
@@ -129,7 +132,7 @@
                     ctx.fillStyle = 'red';
                     ctx.font = '16px Arial';
                     ctx.fillText(
-                        `${prediction.class} ${Math.round(prediction.score * 100)}%`,
+                        `${label} ${Math.round(score * 100)}%`,
                         x, y > 10 ? y - 5 : 10
                     );
                 });
