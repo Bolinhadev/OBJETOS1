@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Detecção de Objetos e Mãos Centralizada</title>
+    <title>Detecção Otimizada de Objetos e Mãos</title>
     <style>
         body, html {
             margin: 0;
@@ -52,7 +52,7 @@
     <div id="loading">Carregando modelos...</div>
 
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils"></script>
@@ -62,14 +62,15 @@
         const ctx = canvas.getContext('2d');
         const loadingElement = document.getElementById('loading');
 
-        let cocoSsdModel;
+        let mobileNetModel;
         let handsModel;
-        let detectionHistory = {};
-        const historyLength = 5;
-        const confidenceThreshold = 0.5;
+        let camera;
+        const confidenceThreshold = 0.3;
 
         async function setupCamera() {
-            const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+                video: { width: 640, height: 480, facingMode: 'environment' } 
+            });
             video.srcObject = stream;
             return new Promise(resolve => {
                 video.onloadedmetadata = () => {
@@ -82,11 +83,11 @@
         }
 
         async function loadModels() {
-            cocoSsdModel = await cocoSsd.load();
+            mobileNetModel = await mobilenet.load({ version: 2, alpha: 1.0 });
             handsModel = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
-            handsModel.setOptions({
+            await handsModel.setOptions({
                 maxNumHands: 2,
-                modelComplexity: 1,
+                modelComplexity: 0,
                 minDetectionConfidence: 0.5,
                 minTrackingConfidence: 0.5
             });
@@ -94,96 +95,49 @@
             loadingElement.style.display = 'none';
         }
 
-        function updateDetectionHistory(detections) {
-            detections.forEach(detection => {
-                if (!detectionHistory[detection.class]) {
-                    detectionHistory[detection.class] = [];
-                }
-                detectionHistory[detection.class].push(detection);
-                if (detectionHistory[detection.class].length > historyLength) {
-                    detectionHistory[detection.class].shift();
-                }
-            });
-
-            Object.keys(detectionHistory).forEach(className => {
-                if (!detections.some(d => d.class === className)) {
-                    detectionHistory[className].shift();
-                    if (detectionHistory[className].length === 0) {
-                        delete detectionHistory[className];
-                    }
-                }
-            });
-        }
-
-        function getSmoothedDetection(className) {
-            const history = detectionHistory[className];
-            if (!history || history.length === 0) return null;
-
-            const recentDetections = history.filter(d => d.score >= confidenceThreshold);
-            if (recentDetections.length === 0) return null;
-
-            const avgDetection = recentDetections.reduce((acc, det) => {
-                acc.score += det.score;
-                acc.bbox[0] += det.bbox[0];
-                acc.bbox[1] += det.bbox[1];
-                acc.bbox[2] += det.bbox[2];
-                acc.bbox[3] += det.bbox[3];
-                return acc;
-            }, { score: 0, bbox: [0, 0, 0, 0] });
-
-            const count = recentDetections.length;
-            avgDetection.score /= count;
-            avgDetection.bbox = avgDetection.bbox.map(v => v / count);
-
-            return { class: className, ...avgDetection };
-        }
-
         async function detectObjects() {
-            const detections = await cocoSsdModel.detect(video);
-            updateDetectionHistory(detections);
-
+            const predictions = await mobileNetModel.classify(video);
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-            Object.keys(detectionHistory).forEach(className => {
-                const smoothedDetection = getSmoothedDetection(className);
-                if (smoothedDetection) {
-                    drawDetection(smoothedDetection);
+            predictions.forEach((prediction, index) => {
+                if (prediction.probability > confidenceThreshold) {
+                    const y = 30 + index * 30;
+                    ctx.fillStyle = 'rgba(0, 255, 0, 0.5)';
+                    ctx.fillRect(10, y - 20, 300, 25);
+                    ctx.fillStyle = 'white';
+                    ctx.font = '16px Arial';
+                    ctx.fillText(`${prediction.className} (${Math.round(prediction.probability * 100)}%)`, 15, y);
                 }
             });
 
-            handsModel.send({image: video});
-
             requestAnimationFrame(detectObjects);
-        }
-
-        function drawDetection(detection) {
-            const [x, y, width, height] = detection.bbox;
-            ctx.strokeStyle = 'green';
-            ctx.lineWidth = 2;
-            ctx.strokeRect(x, y, width, height);
-
-            ctx.fillStyle = 'green';
-            ctx.font = '16px Arial';
-            ctx.fillText(
-                `${detection.class} (${Math.round(detection.score * 100)}%)`,
-                x,
-                y > 10 ? y - 5 : 10
-            );
         }
 
         function onHandResults(results) {
             if (results.multiHandLandmarks) {
                 for (const landmarks of results.multiHandLandmarks) {
-                    drawConnectors(ctx, landmarks, HAND_CONNECTIONS, {color: '#00FF00', lineWidth: 5});
-                    drawLandmarks(ctx, landmarks, {color: '#FF0000', lineWidth: 2});
+                    drawConnectors(ctx, landmarks, HAND_CONNECTIONS, {color: '#00FF00', lineWidth: 3});
+                    drawLandmarks(ctx, landmarks, {color: '#FF0000', lineWidth: 1});
                 }
             }
+        }
+
+        async function startCamera() {
+            camera = new Camera(video, {
+                onFrame: async () => {
+                    await handsModel.send({image: video});
+                },
+                width: 640,
+                height: 480
+            });
+            camera.start();
         }
 
         async function start() {
             await setupCamera();
             await loadModels();
+            await startCamera();
             detectObjects();
         }
 
