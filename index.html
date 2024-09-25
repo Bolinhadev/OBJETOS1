@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Object Detection with COCO-SSD and Camera</title>
+  <style>
+    video, canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+    }
+    video {
+      z-index: -1;
+    }
+  </style>
+</head>
+<body>
+
+<!-- Load TensorFlow.js -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"> </script>
+<!-- Load the coco-ssd model -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"> </script>
+
+<!-- Video element to capture from the camera -->
+<video id="video" width="640" height="480" autoplay></video>
+<!-- Canvas to draw bounding boxes -->
+<canvas id="canvas" width="640" height="480"></canvas>
+
+<script>
+  const video = document.getElementById('video');
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+
+  // Request access to the user's camera
+  navigator.mediaDevices.getUserMedia({
+    video: true
+  }).then(stream => {
+    video.srcObject = stream;
+    video.play();
+  }).catch(err => {
+    console.error('Error accessing the camera: ', err);
+  });
+
+  // Load the COCO-SSD model
+  cocoSsd.load().then(model => {
+    // Function to detect objects in the video
+    function detectObjects() {
+      model.detect(video).then(predictions => {
+        // Clear the canvas
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // Loop through the predictions and draw bounding boxes and labels
+        predictions.forEach(prediction => {
+          // Desenhar a caixa delimitadora
+          ctx.beginPath();
+          ctx.rect(...prediction.bbox);
+          ctx.lineWidth = 2;
+          ctx.strokeStyle = 'green';
+          ctx.fillStyle = 'green';
+          ctx.stroke();
+
+          // Desenhar o nome do objeto
+          ctx.fillText(
+            `${prediction.class} - ${Math.round(prediction.score * 100)}%`,
+            prediction.bbox[0],
+            prediction.bbox[1] > 10 ? prediction.bbox[1] - 5 : 10
+          );
+        });
+      });
+
+      // Continuar detectando objetos em cada frame
+      requestAnimationFrame(detectObjects);
+    }
+
+    // Iniciar a detecção de objetos
+    detectObjects();
+  });
+</script>
+
+</body>
+</html>
