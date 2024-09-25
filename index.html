@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Multi-Model Object Detection</title>
+  <title>Advanced Object and Hand Detection</title>
   <style>
     video, canvas {
       position: absolute;
@@ -24,11 +24,11 @@
 
 <!-- Load TensorFlow.js -->
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"> </script>
-<!-- Load COCO-SSD model for detecting objects -->
+<!-- Load COCO-SSD model for detecting people only -->
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"> </script>
-<!-- Load YOLOv3 for detecting complex objects -->
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/yolo"></script>
-<!-- Load MediaPipe Holistic for detecting people and hands -->
+<!-- Load EfficientDet model for detecting a wide range of objects -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/efficientdet"></script>
+<!-- Load MediaPipe Holistic for detecting hands -->
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/holistic/holistic.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 
@@ -38,19 +38,19 @@
   const canvasCtx = canvasElement.getContext('2d');
 
   let cocoSsdModel;
-  let yoloModel;
+  let efficientDetModel;
 
-  // Load COCO-SSD model for objects like pencil, pen, and phone
+  // Load COCO-SSD model for detecting people only
   cocoSsd.load().then(model => {
     cocoSsdModel = model;
   });
 
-  // Load YOLOv3 model for advanced object detection
-  tf.loadGraphModel('https://tfhub.dev/tensorflow/yolo_v3/1/default/1', {fromTFHub: true}).then(model => {
-    yoloModel = model;
+  // Load EfficientDet model for detecting a wide range of objects
+  efficientdet.load().then(model => {
+    efficientDetModel = model;
   });
 
-  // Initialize MediaPipe Holistic for detecting people and hands
+  // Initialize MediaPipe Holistic for detecting hands
   const holistic = new Holistic({
     locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/holistic/${file}`
   });
@@ -58,8 +58,8 @@
   holistic.setOptions({
     modelComplexity: 1,
     smoothLandmarks: true,
-    enableSegmentation: true,
-    smoothSegmentation: true,
+    enableSegmentation: false, // Disable full body segmentation
+    smoothSegmentation: false,
     refineFaceLandmarks: false,
     minDetectionConfidence: 0.5,
     minTrackingConfidence: 0.5
@@ -71,24 +71,24 @@
   const camera = new Camera(videoElement, {
     onFrame: async () => {
       await holistic.send({image: videoElement});
-      await detectObjectsWithCocoSsd();
-      await detectObjectsWithYolo();
+      await detectObjectsWithEfficientDet();
+      await detectPeopleWithCocoSsd();
     },
     width: 640,
     height: 480
   });
   camera.start();
 
-  // Function to detect objects using COCO-SSD (pencil, phone, pen)
-  async function detectObjectsWithCocoSsd() {
+  // Function to detect people using COCO-SSD
+  async function detectPeopleWithCocoSsd() {
     if (cocoSsdModel) {
       const predictions = await cocoSsdModel.detect(videoElement);
 
       predictions.forEach(prediction => {
-        if (['cell phone', 'pencil', 'pen'].includes(prediction.class)) {
+        if (prediction.class === 'person') {
           const [x, y, width, height] = prediction.bbox;
           
-          // Draw bounding box for detected objects by COCO-SSD
+          // Draw bounding box for detected people by COCO-SSD
           canvasCtx.beginPath();
           canvasCtx.rect(x, y, width, height);
           canvasCtx.lineWidth = 2;
@@ -98,7 +98,7 @@
           // Draw label
           canvasCtx.fillStyle = 'blue';
           canvasCtx.fillText(
-            `${prediction.class} - ${Math.round(prediction.score * 100)}%`,
+            `Person - ${Math.round(prediction.score * 100)}%`,
             x,
             y > 10 ? y - 5 : 10
           );
@@ -107,71 +107,52 @@
     }
   }
 
-  // Function to detect objects using YOLOv3
-  async function detectObjectsWithYolo() {
-    if (yoloModel) {
-      const inputTensor = tf.browser.fromPixels(videoElement).expandDims(0);
-      const predictions = await yoloModel.executeAsync(inputTensor);
+  // Function to detect objects using EfficientDet (for detecting 30+ objects)
+  async function detectObjectsWithEfficientDet() {
+    if (efficientDetModel) {
+      const predictions = await efficientDetModel.detect(videoElement);
 
-      // Get the bounding boxes and class labels from YOLOv3 results
-      const boxes = predictions[0].arraySync();
-      const scores = predictions[1].arraySync();
-      const classes = predictions[2].arraySync();
+      predictions.forEach(prediction => {
+        const [x, y, width, height] = prediction.bbox;
 
-      for (let i = 0; i < boxes.length; i++) {
-        const [ymin, xmin, ymax, xmax] = boxes[i];
-        const width = xmax - xmin;
-        const height = ymax - ymin;
+        // Draw bounding box for detected objects by EfficientDet
+        canvasCtx.beginPath();
+        canvasCtx.rect(x, y, width, height);
+        canvasCtx.lineWidth = 2;
+        canvasCtx.strokeStyle = 'green';
+        canvasCtx.stroke();
 
-        if (scores[i] > 0.5) {
-          const x = xmin * canvasElement.width;
-          const y = ymin * canvasElement.height;
-
-          // Draw bounding box for detected objects by YOLOv3
-          canvasCtx.beginPath();
-          canvasCtx.rect(x, y, width * canvasElement.width, height * canvasElement.height);
-          canvasCtx.lineWidth = 2;
-          canvasCtx.strokeStyle = 'green';
-          canvasCtx.stroke();
-
-          // Draw label
-          canvasCtx.fillStyle = 'green';
-          canvasCtx.fillText(
-            `YOLO Object - ${Math.round(scores[i] * 100)}%`,
-            x,
-            y > 10 ? y - 5 : 10
-          );
-        }
-      }
-
-      tf.dispose([inputTensor, predictions]);
+        // Draw label
+        canvasCtx.fillStyle = 'green';
+        canvasCtx.fillText(
+          `${prediction.class} - ${Math.round(prediction.score * 100)}%`,
+          x,
+          y > 10 ? y - 5 : 10
+        );
+      });
     }
   }
 
-  // Function to handle results from MediaPipe (people and hands detection)
+  // Function to handle results from MediaPipe (hand detection only)
   function onResults(results) {
-    // Draw segmentation mask for person
     canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
-    canvasCtx.drawImage(results.segmentationMask, 0, 0, canvasElement.width, canvasElement.height);
 
-    // If landmarks detected, draw them
-    if (results.poseLandmarks) {
-      drawLandmarks(results.poseLandmarks, 'red');
-    }
+    // Draw landmarks for hands (draw circles only on the hands)
     if (results.leftHandLandmarks) {
-      drawLandmarks(results.leftHandLandmarks, 'green');
+      drawLandmarks(results.leftHandLandmarks, 'red');
     }
     if (results.rightHandLandmarks) {
       drawLandmarks(results.rightHandLandmarks, 'blue');
     }
   }
 
-  // Function to draw landmarks (MediaPipe landmarks for people and hands)
+  // Function to draw landmarks for hands (circles on hand points)
   function drawLandmarks(landmarks, color) {
     landmarks.forEach(landmark => {
       const x = landmark.x * canvasElement.width;
       const y = landmark.y * canvasElement.height;
 
+      // Draw circle on each hand landmark
       canvasCtx.beginPath();
       canvasCtx.arc(x, y, 5, 0, 2 * Math.PI);
       canvasCtx.fillStyle = color;
