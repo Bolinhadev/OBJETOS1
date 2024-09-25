@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Detecção Leve de Faces e Pontos-Chave</title>
+    <title>Detecção de Objetos Otimizada com COCO-SSD</title>
     <style>
         body, html {
             margin: 0;
@@ -42,19 +42,20 @@
         <video id="video" width="640" height="480" autoplay muted></video>
         <canvas id="canvas" width="640" height="480"></canvas>
     </div>
-    <div id="loading">Carregando modelo... <span id="progress">0%</span></div>
+    <div id="loading">Carregando modelo...</div>
 
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/blazeface"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
     <script>
         const video = document.getElementById('video');
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d');
         const loadingElement = document.getElementById('loading');
-        const progressElement = document.getElementById('progress');
 
-        let blazefaceModel;
-        let isProcessing = false;
+        let model;
+        let detectionHistory = {};
+        const historyLength = 5;
+        const confidenceThreshold = 0.5;
 
         async function setupCamera() {
             const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
@@ -68,69 +69,91 @@
         }
 
         async function loadModel() {
-            try {
-                blazefaceModel = await blazeface.load();
-                console.log('BlazeFace modelo carregado.');
-                progressElement.textContent = '100%';
-                loadingElement.style.display = 'none';
-            } catch (error) {
-                console.error('Erro ao carregar o modelo:', error);
-            }
+            model = await cocoSsd.load();
+            loadingElement.style.display = 'none';
         }
 
-        async function detectFaces() {
-            if (isProcessing || !blazefaceModel) return;
-            isProcessing = true;
+        function updateDetectionHistory(detections) {
+            detections.forEach(detection => {
+                if (!detectionHistory[detection.class]) {
+                    detectionHistory[detection.class] = [];
+                }
+                detectionHistory[detection.class].push(detection);
+                if (detectionHistory[detection.class].length > historyLength) {
+                    detectionHistory[detection.class].shift();
+                }
+            });
 
-            try {
-                const predictions = await blazefaceModel.estimateFaces(video, false);
-                
-                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-                predictions.forEach(face => {
-                    // Desenhar caixa do rosto
-                    ctx.strokeStyle = 'green';
-                    ctx.lineWidth = 2;
-                    ctx.strokeRect(
-                        face.topLeft[0], face.topLeft[1],
-                        face.bottomRight[0] - face.topLeft[0],
-                        face.bottomRight[1] - face.topLeft[1]
-                    );
-
-                    // Desenhar pontos-chave
-                    ctx.fillStyle = 'red';
-                    face.landmarks.forEach(landmark => {
-                        ctx.beginPath();
-                        ctx.arc(landmark[0], landmark[1], 3, 0, 2 * Math.PI);
-                        ctx.fill();
-                    });
-
-                    // Adicionar texto com probabilidade
-                    ctx.fillStyle = 'white';
-                    ctx.font = '16px Arial';
-                    ctx.fillText(
-                        `Confiança: ${(face.probability[0] * 100).toFixed(2)}%`,
-                        face.topLeft[0],
-                        face.topLeft[1] - 5
-                    );
-                });
-
-            } catch (error) {
-                console.error('Erro na detecção:', error);
-            }
-
-            isProcessing = false;
+            // Remove classes that are no longer detected
+            Object.keys(detectionHistory).forEach(className => {
+                if (!detections.some(d => d.class === className)) {
+                    detectionHistory[className].shift();
+                    if (detectionHistory[className].length === 0) {
+                        delete detectionHistory[className];
+                    }
+                }
+            });
         }
 
-        function processFrame() {
-            detectFaces();
-            requestAnimationFrame(processFrame);
+        function getSmoothedDetection(className) {
+            const history = detectionHistory[className];
+            if (!history || history.length === 0) return null;
+
+            const recentDetections = history.filter(d => d.score >= confidenceThreshold);
+            if (recentDetections.length === 0) return null;
+
+            const avgDetection = recentDetections.reduce((acc, det) => {
+                acc.score += det.score;
+                acc.bbox[0] += det.bbox[0];
+                acc.bbox[1] += det.bbox[1];
+                acc.bbox[2] += det.bbox[2];
+                acc.bbox[3] += det.bbox[3];
+                return acc;
+            }, { score: 0, bbox: [0, 0, 0, 0] });
+
+            const count = recentDetections.length;
+            avgDetection.score /= count;
+            avgDetection.bbox = avgDetection.bbox.map(v => v / count);
+
+            return { class: className, ...avgDetection };
+        }
+
+        async function detectObjects() {
+            const detections = await model.detect(video);
+            updateDetectionHistory(detections);
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+            Object.keys(detectionHistory).forEach(className => {
+                const smoothedDetection = getSmoothedDetection(className);
+                if (smoothedDetection) {
+                    drawDetection(smoothedDetection);
+                }
+            });
+
+            requestAnimationFrame(detectObjects);
+        }
+
+        function drawDetection(detection) {
+            const [x, y, width, height] = detection.bbox;
+            ctx.strokeStyle = 'green';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(x, y, width, height);
+
+            ctx.fillStyle = 'green';
+            ctx.font = '16px Arial';
+            ctx.fillText(
+                `${detection.class} (${Math.round(detection.score * 100)}%)`,
+                x,
+                y > 10 ? y - 5 : 10
+            );
         }
 
         async function start() {
             await setupCamera();
             await loadModel();
-            processFrame();
+            detectObjects();
         }
 
         start();
