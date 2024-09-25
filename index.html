@@ -3,117 +3,131 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Detecção Múltipla com Debug</title>
+    <title>Detecção de Objetos Centralizada</title>
     <style>
-        body { margin: 0; display: flex; justify-content: center; align-items: center; height: 100vh; background-color: #f0f0f0; }
-        #container { position: relative; }
-        video, canvas { position: absolute; top: 0; left: 0; }
-        #debug { position: fixed; top: 10px; right: 10px; background-color: rgba(0,0,0,0.7); color: white; padding: 10px; font-family: monospace; max-width: 300px; max-height: 80vh; overflow-y: auto; }
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-color: #000;
+            overflow: hidden;
+        }
+        #container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        video, canvas {
+            position: absolute;
+            max-width: 100%;
+            max-height: 100%;
+            width: auto;
+            height: auto;
+        }
+        #loading {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(0,0,0,0.8);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            z-index: 1000;
+        }
     </style>
 </head>
 <body>
     <div id="container">
-        <video id="video" width="640" height="480" autoplay muted></video>
-        <canvas id="canvas" width="640" height="480"></canvas>
+        <video id="video" autoplay muted></video>
+        <canvas id="canvas"></canvas>
     </div>
-    <div id="debug"></div>
+    <div id="loading">Carregando modelos... <span id="progress">0%</span></div>
 
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/blazeface"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/handpose"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/posenet"></script>
     <script>
         const video = document.getElementById('video');
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d');
-        const debugElement = document.getElementById('debug');
+        const loadingElement = document.getElementById('loading');
+        const progressElement = document.getElementById('progress');
 
-        let cocoSsdModel, mobilenetModel, blazefaceModel, handposeModel, posenetModel;
-        let drawCount = 0;
-
-        function debugLog(message) {
-            debugElement.innerHTML += message + '<br>';
-            debugElement.scrollTop = debugElement.scrollHeight;
-        }
+        let cocoSsdModel, mobilenetModel;
+        let isProcessing = false;
 
         async function setupCamera() {
-            debugLog('Configurando câmera...');
-            const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true });
             video.srcObject = stream;
             return new Promise(resolve => {
                 video.onloadedmetadata = () => {
                     video.play();
-                    debugLog('Câmera configurada.');
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
                     resolve();
                 };
             });
         }
 
-        async function loadModels() {
-            debugLog('Carregando modelos...');
-            cocoSsdModel = await cocoSsd.load();
-            mobilenetModel = await mobilenet.load();
-            blazefaceModel = await blazeface.load();
-            handposeModel = await handpose.load();
-            posenetModel = await posenet.load();
-            debugLog('Todos os modelos carregados.');
+        async function loadModel(modelLoader, name) {
+            try {
+                return await modelLoader();
+            } catch (error) {
+                console.error(`Erro ao carregar ${name}:`, error);
+                return null;
+            }
         }
 
-        async function detectAndClassify() {
-            debugLog('Iniciando detecção...');
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        async function loadModels() {
+            const totalModels = 2;
+            let loadedModels = 0;
 
-            drawCount = 0;
+            const updateProgress = () => {
+                loadedModels++;
+                const progress = Math.round((loadedModels / totalModels) * 100);
+                progressElement.textContent = `${progress}%`;
+            };
+
+            [cocoSsdModel, mobilenetModel] = await Promise.all([
+                loadModel(() => cocoSsd.load(), 'COCO-SSD').then(model => { updateProgress(); return model; }),
+                loadModel(() => mobilenet.load(), 'MobileNet').then(model => { updateProgress(); return model; })
+            ]);
+
+            loadingElement.style.display = 'none';
+        }
+
+        async function detectObjects() {
+            if (isProcessing) return;
+            isProcessing = true;
 
             try {
-                // COCO-SSD detection
-                const cocoDetections = await cocoSsdModel.detect(video);
-                debugLog(`COCO-SSD detectou ${cocoDetections.length} objetos.`);
-                cocoDetections.forEach(detection => {
-                    drawBox(detection.bbox, 'red', `${detection.class} (${Math.round(detection.score * 100)}%)`);
-                });
-
-                // MobileNet classification
-                const mobilenetClassification = await mobilenetModel.classify(video);
-                if (mobilenetClassification.length > 0) {
-                    const topPrediction = mobilenetClassification[0];
-                    drawText(`MobileNet: ${topPrediction.className} (${Math.round(topPrediction.probability * 100)}%)`, 10, canvas.height - 10, 'blue');
+                if (cocoSsdModel) {
+                    const cocoDetections = await cocoSsdModel.detect(video);
+                    cocoDetections.forEach(detection => {
+                        drawBox(detection.bbox, 'red', `${detection.class} (${Math.round(detection.score * 100)}%)`);
+                    });
                 }
 
-                // BlazeFace detection
-                const blazefaceDetections = await blazefaceModel.estimateFaces(video, false);
-                debugLog(`BlazeFace detectou ${blazefaceDetections.length} rostos.`);
-                blazefaceDetections.forEach(face => {
-                    drawBox([face.topLeft[0], face.topLeft[1], face.bottomRight[0] - face.topLeft[0], face.bottomRight[1] - face.topLeft[1]], 'green', 'Face');
-                });
-
-                // HandPose detection
-                const hands = await handposeModel.estimateHands(video);
-                debugLog(`HandPose detectou ${hands.length} mãos.`);
-                hands.forEach(hand => {
-                    const palmBase = hand.landmarks[0];
-                    drawPoint(palmBase[0], palmBase[1], 'yellow', 'Hand');
-                });
-
-                // PoseNet detection
-                const pose = await posenetModel.estimateSinglePose(video);
-                const visibleKeypoints = pose.keypoints.filter(kp => kp.score > 0.5).length;
-                debugLog(`PoseNet detectou ${visibleKeypoints} pontos-chave visíveis.`);
-                pose.keypoints.forEach(keypoint => {
-                    if (keypoint.score > 0.5) {
-                        drawPoint(keypoint.position.x, keypoint.position.y, 'purple', keypoint.part);
+                if (mobilenetModel) {
+                    const mobilenetClassification = await mobilenetModel.classify(video);
+                    if (mobilenetClassification.length > 0) {
+                        const topPrediction = mobilenetClassification[0];
+                        drawText(`${topPrediction.className} (${Math.round(topPrediction.probability * 100)}%)`, 10, canvas.height - 10, 'blue');
                     }
-                });
-
-                debugLog(`Total de elementos desenhados: ${drawCount}`);
+                }
             } catch (error) {
-                debugLog(`Erro durante a detecção: ${error.message}`);
+                console.error('Erro na detecção:', error);
             }
 
-            requestAnimationFrame(detectAndClassify);
+            isProcessing = false;
         }
 
         function drawBox(bbox, color, label) {
@@ -122,30 +136,24 @@
             ctx.lineWidth = 2;
             ctx.strokeRect(x, y, width, height);
             drawText(label, x, y - 5, color);
-            drawCount++;
-        }
-
-        function drawPoint(x, y, color, label) {
-            ctx.fillStyle = color;
-            ctx.beginPath();
-            ctx.arc(x, y, 5, 0, 2 * Math.PI);
-            ctx.fill();
-            drawText(label, x, y - 5, color);
-            drawCount++;
         }
 
         function drawText(text, x, y, color) {
             ctx.fillStyle = color;
             ctx.font = '16px Arial';
             ctx.fillText(text, x, y);
-            drawCount++;
+        }
+
+        function processFrame() {
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            detectObjects();
+            requestAnimationFrame(processFrame);
         }
 
         async function start() {
-            debugLog('Iniciando aplicação...');
             await setupCamera();
             await loadModels();
-            detectAndClassify();
+            processFrame();
         }
 
         start();
